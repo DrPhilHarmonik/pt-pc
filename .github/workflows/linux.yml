@@ -1,0 +1,39 @@
+name: linux
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ninja-build ccache glslc libvulkan-dev mesa-vulkan-drivers \
+            libx11-dev libxext-dev libxcursor-dev libxi-dev libxrandr-dev libxss-dev libxfixes-dev libxtst-dev \
+            libwayland-dev libxkbcommon-dev libdecor-0-dev wayland-protocols libegl-dev \
+            libasound2-dev libpulse-dev libpipewire-0.3-dev libdbus-1-dev libudev-dev
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/ccache
+          key: linux-${{ hashFiles('cmake/Dependencies.cmake') }}-${{ github.sha }}
+          restore-keys: linux-${{ hashFiles('cmake/Dependencies.cmake') }}-
+
+      - name: Configure
+        run: cmake --preset linux -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+
+      - name: Build
+        run: cmake --build --preset linux
+
+      # no game files and no GPU on the runner: the game-data tests are left out and the GPU test runs on lavapipe
+      - name: Test
+        run: ctest --preset linux -LE game
+        env:
+          VK_DRIVER_FILES: /usr/share/vulkan/icd.d/lvp_icd.json

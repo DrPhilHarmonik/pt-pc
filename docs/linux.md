@@ -28,8 +28,9 @@ Settings, saves and `pt.log` live in `~/.local/share/pt-port/pt/`.
 
 ## Building
 
-Native, on a Linux machine (X11 and Wayland): `cmake -G Ninja -B build/linux -DCMAKE_BUILD_TYPE=RelWithDebInfo` then
-`cmake --build build/linux --parallel 6 --target pt`. Needs a C++20 compiler with `<format>` (GCC 13+ or clang 17+),
+Native, on a Linux machine (X11 and Wayland): `cmake --preset linux` then `cmake --build --preset linux` (into
+`build/linux`; `linux-debug` for a debug build). `.github/workflows/linux.yml` does the same on Ubuntu 24.04 and runs the
+unit tests. Needs a C++20 compiler with `<format>` (GCC 13+ or clang 17+),
 the Vulkan headers and `glslc`.
 
 Cross build on Windows:
@@ -48,7 +49,7 @@ an older sysroot would lower it.
 
 ## Running the checks
 
-The unit tests are registered with CTest: `ctest --test-dir build/linux -j6`. The ones that read game files (label
+The unit tests are registered with CTest: `ctest --preset linux`. The ones that read game files (label
 `game`) are added when `PT_TEST_GAME` (default `game/CUSA01127`) holds the game archives; `-LE game` or `-LE gpu` skips
 a group.
 
