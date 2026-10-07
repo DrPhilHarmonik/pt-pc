@@ -85,6 +85,10 @@ and runs the copy.
 
 ## Running the checks
 
+The unit tests are registered with CTest: `ctest --test-dir build/linux -j6`. The ones that read game files (label
+`game`) are added when `PT_TEST_GAME` (default `game/CUSA01127`) holds the game archives; `-LE game` or `-LE gpu` skips
+a group.
+
 From a Linux machine or WSL, with the cross build in `build/linux-cross`:
 
     sh tools/linux/run_tests.sh <game folder> <output folder> <linux installer>
