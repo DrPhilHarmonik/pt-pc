@@ -1,5 +1,5 @@
-# the port's credits page in Japanese (the game's own Japanese fonts) and skipped with a confirm press on its last card: the street
-# question opens at once
+# the port's credits page in Japanese (the game's own Japanese fonts) and skipped with a confirm press on its third card (the last
+# one without the upscaler cards, as on Linux): the street question opens at once
 srate 1
 swait 200
 sui subs 1 4
@@ -10,10 +10,6 @@ swait 300
 sshot {shots}/credits_jpn_1.png
 swait 360
 sshot {shots}/credits_jpn_2.png
-swait 360
-sshot {shots}/credits_jpn_3.png
-swait 360
-sshot {shots}/credits_jpn_4.png
 sui menukey accept
 swait 30
 sexpect menu 1
