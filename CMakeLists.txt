@@ -672,3 +672,49 @@ target_link_libraries(pt_display_policy_test PRIVATE pt_engine)
 add_executable(pt_pipeline_cache_store_test tests/pipeline_cache_store_test.cpp)
 target_link_libraries(pt_pipeline_cache_store_test PRIVATE pt_engine)
 
+# ctest --test-dir <build>: the unit tests. Tests that read game files run when PT_TEST_GAME is a CUSA01127 folder
+# (default game/CUSA01127); audio, vfx and the texture tests take hand-picked inputs and stay manual.
+# Every registration is guarded by if(TARGET), because several targets are built only on one platform.
+enable_testing()
+set(PT_TEST_GAME "${CMAKE_SOURCE_DIR}/game/CUSA01127" CACHE PATH "game folder for the unit tests that read game files")
+foreach(t pt_tests pt_collision_test pt_mods_test pt_graphics_preset_test pt_gouge_input_test pt_peephole_look_test
+    pt_light_cull_test pt_blur_sway_test pt_dominant_light_test pt_language_default_test pt_skin_render_test
+    pt_texture_cache_test pt_upscaler_gpu_test pt_voice_match_test pt_vr_view_test pt_mouse_render_test pt_platform_test
+    pt_archive_model_camera_test pt_archive_unlock_test pt_audio_channel_layout_test pt_camera_blend_test
+    pt_composite_output_test pt_controller_feedback_test pt_controller_speaker_route_test pt_d3d12_hdr_framegen_test
+    pt_d3d12_ngx_identity_test pt_device_start_test pt_dialog_nav_test pt_discord_presence_test pt_display_modes_test
+    pt_display_policy_test pt_foliage_shadow_test pt_gyro_test pt_hdr_output_test pt_intercom_test pt_key_layout_test
+    pt_lisa_date_test pt_notice_queue_test pt_nr_toggle_policy_test pt_output_device_test pt_outro_input_test
+    pt_parallel_for_test pt_pc_prompt_note_test pt_pc_settings_refresh_test pt_photo_panel_test pt_photo_preset_test
+    pt_point_shadow_projection_test pt_prompt_hint_test pt_route_queue_test pt_rt_record_flags_test
+    pt_skin_shadow_receiver_test pt_sound_captions_test pt_spatial_output_test pt_vk_address_log_test)
+  if(TARGET ${t})
+    add_test(NAME ${t} COMMAND ${t})
+  endif()
+endforeach()
+# pt_rendering_api_test is left out: its expectations are the D3D12 ones, so it only holds on Windows.
+# these reach for a device, so they can be deselected with ctest -LE gpu
+foreach(t pt_reflection_mix_test pt_fsr_provider_gate_test pt_intel_vulkan_driver_test pt_native_projection_test pt_pipeline_cache_store_test
+    pt_rt_fitting_policy_test pt_vk_layers_test)
+  if(TARGET ${t})
+    add_test(NAME ${t} COMMAND ${t})
+    set_tests_properties(${t} PROPERTIES LABELS gpu)
+  endif()
+endforeach()
+foreach(t pt_save_reset_test pt_save_status_test pt_settings_roundtrip_test)
+  if(TARGET ${t})
+    add_test(NAME ${t} COMMAND ${t} "${CMAKE_BINARY_DIR}/test-tmp/${t}")
+  endif()
+endforeach()
+if(EXISTS "${PT_TEST_GAME}/texture.qar")
+  foreach(t pt_localization_test pt_multilingual_test pt_player_publish_test)
+    if(TARGET ${t})
+      add_test(NAME ${t} COMMAND ${t} "${PT_TEST_GAME}")
+      set_tests_properties(${t} PROPERTIES LABELS game)
+    endif()
+  endforeach()
+  if(TARGET pt_mouse_render_test)
+    add_test(NAME pt_mouse_render_game_test COMMAND pt_mouse_render_test "${PT_TEST_GAME}")
+    set_tests_properties(pt_mouse_render_game_test PROPERTIES LABELS game)
+  endif()
+endif()
