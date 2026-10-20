@@ -1,0 +1,121 @@
+# The Linux AppImage (docs/linux.md): one x86_64 file, built on GitHub's ubuntu-24.04 runner, whose glibc 2.39 is newer
+# than the 2.38 the game needs. A published release gets P.T.PC.Port-x86_64.AppImage; run by hand
+# (Actions > Linux > Run workflow) the image is a workflow artifact.
+name: Linux
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      upscalers:
+        description: Build FSR and DLSS (FSR compiles AMD's shaders through wine)
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  appimage:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v7
+
+      # find_package(Vulkan COMPONENTS glslc) wants the headers and glslc; SDL3 is built from source (cmake/Dependencies.cmake)
+      # and loads X11, Wayland, ALSA, PulseAudio and PipeWire at run time, so they need their development packages
+      - name: Tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake ninja-build g++ pkg-config \
+            libvulkan-dev glslc glslang-tools \
+            libx11-dev libxext-dev libxrandr-dev libxfixes-dev libxi-dev libxtst-dev libxkbcommon-dev \
+            libwayland-dev wayland-protocols libdecor-0-dev \
+            libasound2-dev libpulse-dev libpipewire-0.3-dev libudev-dev libdbus-1-dev
+
+      # FSR is built from AMD's sources, whose shader permutations FidelityFX_SC.exe compiles under wine
+      # (cmake/UpscalersLinux.cmake). Without wine CMake leaves FSR out with a warning and the image ships DLSS only.
+      - name: Wine for the FSR shaders
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.upscalers }}
+        continue-on-error: true
+        run: |
+          sudo apt-get install -y --no-install-recommends wine64 || sudo apt-get install -y --no-install-recommends wine
+          wine --version
+
+      - name: Version
+        id: version
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = release ]; then
+            version="${GITHUB_REF_NAME#v}"
+          else
+            version="$(sed -n 's/^set(PT_VERSION "\(.*\)")$/\1/p' CMakeLists.txt)"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Build
+        env:
+          PT_VERSION: ${{ steps.version.outputs.version }}
+          WINEDEBUG: -all
+        run: |
+          upscalers=ON
+          if [ "${{ github.event_name }}" = workflow_dispatch ] && [ "${{ inputs.upscalers }}" = false ]; then
+            upscalers=OFF
+          fi
+          cmake -G Ninja -B build/linux -DCMAKE_BUILD_TYPE=RelWithDebInfo -DPT_UPSCALERS=$upscalers
+          # pt brings the shaders, fonts, lisa_date, voice/ and the upscaler runtimes into the build folder; pt_release is
+          # the shipped game (the loop browser unlocks as the game was finished, PT_RELEASE_LOCKS)
+          cmake --build build/linux --parallel "$(nproc)" --target pt_release pt
+          cat build/linux/upscalers.txt 2>/dev/null || true
+
+      # the tests that need neither a Vulkan device nor the game files; the .zar reader and the data folder rules are the
+      # ones an AppImage is most likely to break
+      - name: Checks
+        run: |
+          cmake --build build/linux --parallel "$(nproc)" --target pt_zarchive_test pt_user_data_test pt_mods_test
+          build/linux/pt_zarchive_test "$RUNNER_TEMP/pt-zarchive"
+          build/linux/pt_user_data_test "$RUNNER_TEMP/pt-user-data"
+          build/linux/pt_mods_test "$RUNNER_TEMP/pt-mods"
+
+      - name: AppImage tool
+        run: |
+          mkdir -p "$RUNNER_TEMP/appimagetool"
+          curl -fsSL -o "$RUNNER_TEMP/appimagetool/appimagetool-x86_64.AppImage" \
+            https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage
+          chmod +x "$RUNNER_TEMP/appimagetool/appimagetool-x86_64.AppImage"
+
+      - name: AppImage
+        env:
+          PT_APPIMAGETOOL: ${{ runner.temp }}/appimagetool/appimagetool-x86_64.AppImage
+        run: python3 tools/linux/make_appimage.py --build build/linux --exe build/linux/pt_release
+
+      # the runner has no FUSE: the runtime unpacks the image instead of mounting it, and --help is handled before a window
+      # or a Vulkan device is asked for (src/main.cpp)
+      - name: Smoke test
+        run: |
+          image="dist/P.T.PC.Port-x86_64.AppImage"
+          file "$image"
+          APPIMAGE_EXTRACT_AND_RUN=1 "$image" --help | tee "$RUNNER_TEMP/help.txt"
+          grep -q -- "--game" "$RUNNER_TEMP/help.txt"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: P.T.PC.Port-Linux-x86_64-${{ steps.version.outputs.version }}
+          path: dist/P.T.PC.Port-x86_64.AppImage
+
+  release:
+    if: github.event_name == 'release'
+    needs: appimage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          path: images
+          merge-multiple: true
+
+      - name: Release app asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "$GITHUB_REF_NAME" images/P.T.PC.Port-x86_64.AppImage --clobber --repo "$GITHUB_REPOSITORY"

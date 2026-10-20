@@ -249,7 +249,7 @@ struct OptionSpec {
 };
 constexpr OptionSpec kOptionSpecs[] = {
     {"--help", 0, "print this list and exit (also -h)"},
-    {"--game", 1, "<folder> the extracted CUSA01127 folder"},
+    {"--game", 1, "<folder|.zar> the extracted CUSA01127 folder, or a .zar of it"},
     {"--settings", 1, "<file> pt.ini to use instead of data/pt.ini next to the executable"},
     {"--save-dir", 1, "<folder> where saves go"},
     {"--no-save", 0, "never write a save"},
@@ -862,6 +862,19 @@ void ApplyFullscreen(App& app) {
 std::filesystem::path g_output_dir;
 std::filesystem::path g_log_path;
 
+#if !defined(__APPLE__) && !defined(_WIN32)
+/* The Linux user folder: $XDG_DATA_HOME/pt-port/pt, or ~/.local/share/pt-port/pt. A copy that cannot write next to pt
+ * keeps its data there (an AppImage, docs/linux.md), and it is where the old profiles were (LegacyUserDataDir). */
+std::filesystem::path XdgDataDir() {
+    const auto value = pt::os::GetEnv("XDG_DATA_HOME");
+    if (value.empty()) {
+        const auto home = pt::os::GetEnv("HOME");
+        return home.empty() ? std::filesystem::path() : pt::os::PathFromUtf8(home) / ".local" / "share" / "pt-port" / "pt";
+    }
+    return pt::os::PathFromUtf8(value) / "pt-port" / "pt";
+}
+#endif
+
 std::filesystem::path UserDataDir() {
 #ifdef __APPLE__
     /* inside the app bundle (ExecutableDir() is Contents/Resources) nothing may be written: a signed bundle, often in
@@ -879,6 +892,17 @@ std::filesystem::path UserDataDir() {
         if (!error) return resolved;
         pt::LogWarn("Cannot resolve macOS data folder '{}': {}", pt::os::PathToUtf8(requested), error.message());
         return requested;
+    }();
+    return directory;
+#elif defined(__linux__)
+    /* An AppImage (tools/linux/make_appimage.py) runs from a read-only squashfs mount, so nothing next to pt can be
+       written there: settings, saves and pt.log live in the user's folder, as in a macOS bundle. A build folder or an
+       unzipped portable copy keeps data/ next to pt. The AppImage runtime sets APPIMAGE to the file it started. */
+    static const std::filesystem::path directory = [] {
+        if (!pt::os::GetEnv("APPIMAGE").empty()) {
+            if (const std::filesystem::path user = XdgDataDir(); !user.empty()) return user;
+        }
+        return pt::ExecutableDir() / "data";
     }();
     return directory;
 #else
@@ -924,18 +948,19 @@ std::filesystem::path LegacyUserDataDir() {
     const auto value = pt::os::GetEnv("APPDATA");
     return value.empty() ? std::filesystem::path() : pt::os::PathFromUtf8(value) / "pt-port" / "pt";
 #else
-    const auto value = pt::os::GetEnv("XDG_DATA_HOME");
-    if (value.empty()) {
-        const auto home = pt::os::GetEnv("HOME");
-        return home.empty() ? std::filesystem::path() : pt::os::PathFromUtf8(home) / ".local" / "share" / "pt-port" / "pt";
-    }
-    return pt::os::PathFromUtf8(value) / "pt-port" / "pt";
+    /* An AppImage keeps its data in the XDG folder already (UserDataDir): there is no older profile to move into it */
+    const std::filesystem::path folder = XdgDataDir();
+    return folder == UserDataDir() ? std::filesystem::path() : folder;
 #endif
 }
 
+/* A folder with the two game archives, or a .zar that holds them (the shape the game mounts, see
+ * engine/fs/vfs.cpp; the check here only looks, Mount() reports what a file really is). */
 bool LooksLikeGameDir(const std::filesystem::path& dir) {
     std::error_code error;
-    return !dir.empty() && std::filesystem::exists(dir / "chunk1.psarc", error) && std::filesystem::exists(dir / "texture.qar", error);
+    if (dir.empty()) return false;
+    if (!std::filesystem::is_directory(dir, error)) return pt::ZArchive::LooksLikeArchive(dir);
+    return std::filesystem::exists(dir / "chunk1.psarc", error) && std::filesystem::exists(dir / "texture.qar", error);
 }
 
 std::filesystem::path RememberedGameDirFile() {
@@ -957,6 +982,13 @@ std::filesystem::path FindGameDir(const Options& options, std::string& source, b
             if (LooksLikeGameDir(candidate)) {
                 source = depth == 0 ? "next to the program" : std::format("{} folder{} above the program", depth, depth == 1 ? "" : "s");
                 return candidate;
+            }
+        }
+        for (const std::filesystem::path& folder : {dir / "game", dir}) {
+            const std::filesystem::path archive = pt::first_run::SingleGameArchive(folder);
+            if (!archive.empty() && pt::ZArchive::LooksLikeArchive(archive)) {
+                source = depth == 0 ? "the .zar next to the program" : std::format("the .zar {} folder{} above the program", depth, depth == 1 ? "" : "s");
+                return archive;
             }
         }
         if (dir == dir.parent_path()) {
@@ -986,7 +1018,7 @@ std::filesystem::path FindGameDir(const Options& options, std::string& source, b
         return options.game_dir;
     }
     pt::LogInfo("game files: none next to the program, in the folders above it or in game_dir.txt; the first-run screen asks for the "
-                "PKG or the extracted folder");
+                "PKG, the extracted folder or a .zar");
     pt::first_run::Context context;
     context.program_dir = pt::ExecutableDir();
     context.user_dir = UserDataDir();
@@ -1000,8 +1032,10 @@ std::filesystem::path FindGameDir(const Options& options, std::string& source, b
 #endif
 #ifdef __APPLE__
     context.helper_candidates.push_back(pt::ExecutablePath().parent_path() / "extractor" / "PT.PkgExtract");
-    context.program_dir_read_only = UserDataDir() != pt::ExecutableDir() / "data";
 #endif
+    /* a macOS bundle and a Linux AppImage cannot be written to (docs/linux.md): what the first-run screen extracts goes
+       to the user folder instead */
+    context.program_dir_read_only = UserDataDir() != pt::ExecutableDir() / "data";
     context.missing_packages = [](const std::filesystem::path& dir) {
         pt::Vfs check;
         return check.Mount(dir) ? check.MissingCorePackages() : -1;
@@ -4877,14 +4911,20 @@ int RunGame(App& app, pt::Vfs& vfs) {
     uint32_t boot_splash_texture = pt::TextureManager::kWhite;
     const bool shader_screen_wanted = ui_ready && app.window && options.input_script.empty() && app.renderer.Context().pipeline_cache_cold;
     if (ui_ready && app.window && options.input_script.empty()) {
-        const uint32_t splash = app.textures.LoadImageFile(options.game_dir / "sce_sys" / "pic1.png", "boot_splash");
-        if (splash != pt::TextureManager::kWhite) {
-            boot_splash_seconds = 4.0f;
-            boot_splash_texture = splash;
-            if (!shader_screen_wanted) ui.ShowBootSplash(splash, boot_splash_seconds);
+        if (vfs.IsArchive()) {
+            /* The title picture is a file of the dump, not of chunk1.psarc; a .zar of the game files
+             * has none to load through the archives, and the start goes to its loading screen. */
+            pt::LogInfo("boot: the game files are a .zar and its archives do not hold the title picture; the start goes to its loading screen");
         } else {
-            pt::LogInfo("boot: no title picture at {} (the setup copies it from the dump or package), the start goes to its loading screen",
-                        pt::os::PathToUtf8(options.game_dir / "sce_sys" / "pic1.png"));
+            const uint32_t splash = app.textures.LoadImageFile(options.game_dir / "sce_sys" / "pic1.png", "boot_splash");
+            if (splash != pt::TextureManager::kWhite) {
+                boot_splash_seconds = 4.0f;
+                boot_splash_texture = splash;
+                if (!shader_screen_wanted) ui.ShowBootSplash(splash, boot_splash_seconds);
+            } else {
+                pt::LogInfo("boot: no title picture at {} (the setup copies it from the dump or package), the start goes to its loading screen",
+                            pt::os::PathToUtf8(options.game_dir / "sce_sys" / "pic1.png"));
+            }
         }
     }
     if (ui_ready) {
@@ -7389,12 +7429,15 @@ int main(int argc, char** argv) {
     pt::boot::Phase("game folder", game_dir_source);
     const bool mounted = vfs.Mount(game_dir);
     pt::boot::Phase("game archives");
+    if (vfs.IsArchive()) {
+        pt::LogInfo("game files: the .zar is mounted; chunk1.psarc and texture.qar are read from inside it");
+    }
     if (const int missing = mounted ? vfs.MissingCorePackages() : 0; missing > 0 && !options.headless) {
         startup_failure(std::format("The game files in\n{}\nare not a complete P.T. (CUSA01127): {} of the 12 packages every loop needs "
                                     "are missing from chunk1.psarc.",
                                     pt::os::PathToUtf8(std::filesystem::absolute(game_dir)), missing),
-                        "Run the setup again and pick your own P.T. package (the .pkg) or a full CUSA01127 dump. Files from another "
-                        "game, another release's partial download or a re-packed archive do not work.");
+                        "Run the setup again and pick your own P.T. package (the .pkg), a full CUSA01127 dump, or a .zar of one. "
+                        "Files from another game, another release's partial download or a re-packed archive do not work.");
         return 1;
     }
     if (!mounted) {
@@ -7402,15 +7445,18 @@ int main(int argc, char** argv) {
 #ifdef __APPLE__
             const std::string text = "The P.T. game files were not found in\n" + pt::os::PathToUtf8(std::filesystem::absolute(game_dir)) +
                                      "\n\nStart P.T. again and pick your extracted CUSA01127 folder (it contains chunk1.psarc and "
-                                     "texture.qar), put that folder next to P.T. PC Port.app, or start pt with --game <folder>.";
+                                     "texture.qar) or a .zar of it, put that folder or archive next to P.T. PC Port.app, or start pt "
+                                     "with --game <folder or .zar>.";
 #elif defined(_WIN32)
             const std::string text = "The P.T. game files were not found in\n" + pt::os::PathToUtf8(std::filesystem::absolute(game_dir)) +
                                      "\n\nStart P.T. again and pick your extracted CUSA01127 folder (it contains chunk1.psarc and "
-                                     "texture.qar), put that folder next to pt.exe, or start pt.exe with --game <folder>.";
+                                     "texture.qar) or a .zar of it, put that folder or archive next to pt.exe, or start pt.exe with "
+                                     "--game <folder or .zar>.";
 #else
             const std::string text = "The P.T. game files were not found in\n" + pt::os::PathToUtf8(std::filesystem::absolute(game_dir)) +
                                      "\n\nStart P.T. again and pick your extracted CUSA01127 folder (it contains chunk1.psarc and "
-                                     "texture.qar), put that folder next to pt, or start pt with --game <folder>.";
+                                     "texture.qar) or a .zar of it, put that folder or archive next to pt, or start pt with "
+                                     "--game <folder or .zar>.";
 #endif
             SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "P.T.", text.c_str(), nullptr);
         }
@@ -7429,7 +7475,13 @@ int main(int argc, char** argv) {
 
     pt::FilePrefetch file_prefetch;
     if (const char* prefetch = std::getenv("PT_PREFETCH"); !prefetch || std::string_view(prefetch) != "0") {
-        file_prefetch.Start({game_dir / "chunk1.psarc", game_dir / "texture.qar"});
+        if (vfs.IsArchive()) {
+            /* The read-ahead pass is for the two game archives. A .zar may hold the whole dump, which
+             * is not worth pulling through the file cache for the blocks the game reads from it. */
+            pt::LogInfo("game files: no read-ahead pass for a .zar");
+        } else {
+            file_prefetch.Start({game_dir / "chunk1.psarc", game_dir / "texture.qar"});
+        }
     }
 
     if (!SDL_Init(options.headless ? 0 : SDL_INIT_VIDEO)) {

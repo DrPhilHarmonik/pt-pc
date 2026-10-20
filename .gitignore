@@ -15,8 +15,8 @@ Build/
 *.self
 *.oelf
 *.prx
-*.sprx
-*.qar
+*.sprx*.qar
+*.zar
 *.dat
 *.sfo
 *.at9

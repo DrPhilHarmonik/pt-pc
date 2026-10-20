@@ -19,12 +19,15 @@ Everything the engine needs from the operating system beyond SDL3 goes through `
 | folder picker when no game is found | `IFileOpenDialog` | none: a message box asks for `--game` |
 | crash dump | `MiniDumpWriteDump` | none |
 
-Off on Linux: AMD FSR 3 and its frame generation, Intel XeSS and NVIDIA DLSS. Their SDKs ship Windows DLLs, so
-`PT_UPSCALERS` defaults to OFF outside Windows and the code behind `PT_WITH_FSR`, `PT_WITH_DLSS` and `PT_WITH_XESS` is
-left out. DLSS has a Linux runtime (`libnvidia-ngx-dlss.so`) that could be added later. Vulkan itself is loaded by volk
-at run time; SDL3 loads X11, Wayland, ALSA, PulseAudio and PipeWire at run time.
+On Linux, `PT_UPSCALERS` (`cmake/UpscalersLinux.cmake`) builds NVIDIA DLSS from the SDK's Linux files
+(`libnvidia-ngx-dlss.so`, `libnvidia-ngx-dlssd.so`, staged next to pt as the Windows DLLs are) and AMD FSR 3.1 from
+AMD's v1.1.4 sources, whose Vulkan shader permutations AMD's `FidelityFX_SC.exe` compiles under wine, together with
+`glslangValidator` from `glslang-tools` (`apt-get install wine glslang-tools`); without either CMake warns and leaves
+FSR out. Frame generation and Intel XeSS stay Windows-only, as do the DirectX 12 backend and the D3D12 game. Vulkan
+itself is loaded by volk at run time; SDL3 loads X11, Wayland, ALSA, PulseAudio and PipeWire at run time.
 
-Settings, saves and `pt.log` live in `~/.local/share/pt-port/pt/`.
+Settings, saves and `pt.log` live in `data/` next to pt (a build folder, an unzipped portable copy), and in
+`~/.local/share/pt-port/pt/` in the AppImage, which is a read-only mount.
 
 ## Building
 
@@ -45,6 +48,38 @@ Every target builds this way: `pt`, all unit tests and `pt_setup_linux`. `pt` ne
 newer, because the Debian trixie headers map `strtol`, `sscanf` and `fmod` to their 2.38 versions and SDL finds
 `strlcpy` there. That is Ubuntu 24.04, Debian 13, Fedora 39 and newer, and current Arch and SteamOS. Building against
 an older sysroot would lower it.
+
+## AppImage
+
+`tools/linux/make_appimage.py` turns a Linux build folder into one portable file, `dist/P.T.PC.Port-x86_64.AppImage`
+(one per architecture; x86-64 is the only Linux target):
+
+    cmake -G Ninja -B build/linux -DCMAKE_BUILD_TYPE=RelWithDebInfo
+    cmake --build build/linux --parallel 6 --target pt pt_release
+    python3 tools/linux/make_appimage.py --build build/linux --exe build/linux/pt_release
+
+Both game targets are built because the font copy hangs off `pt` and the lisa_date copy off `pt_lisa_date_assets` (an
+`ALL` target), so `pt_release` alone leaves those two folders out of the build folder.
+
+It fills an AppDir's `usr/bin` with the game (shipped as `pt`), `shaders/`, `fonts/`, `lisa_date/`, `voice/`, the
+licences and the upscaler runtimes, all where pt looks for them through `SDL_GetBasePath()`, adds `AppRun`, the desktop
+entry and the icon, and hands the folder to appimagetool (`--appimagetool`, `$PT_APPIMAGETOOL`, or `appimagetool` on
+PATH). The AppDir stays in `dist/AppDir` to look inside. `.github/workflows/linux.yml` does this on ubuntu-24.04 (whose
+glibc 2.39 is newer than the 2.38 the game needs) after the unit tests, and runs the image once before uploading it.
+
+Nothing is written into the image: pt keeps `pt.ini`, saves and `pt.log` in `~/.local/share/pt-port/pt/` (`UserDataDir`
+in `src/main.cpp` sees the runtime's `APPIMAGE` variable; `--settings`, `--save-dir` and `--log` still choose another
+place). The Konami files are not in the image: `AppRun` passes a `CUSA01127` folder or a single `.zar` that lies next to
+the `.AppImage` as `--game`, and `--game`, the first-run screen and `game_dir.txt` work as for every other copy.
+
+The image has no updater of its own: a newer release is a new download (pt.ini and the saves stay in
+`~/.local/share/pt-port/pt/`), and the version notice on the PC settings page keeps pointing at the release page and at
+the Linux installer, as `docs/updates.md` describes.
+
+The runtime appimagetool writes bundles FUSE 3, so current distributions mount the image as they are; where neither
+FUSE 3 nor FUSE 2 is available (a container, a CI runner, an older system) it still runs with
+`./P.T.PC.Port-x86_64.AppImage --appimage-extract-and-run`, or with `APPIMAGE_EXTRACT_AND_RUN=1` set, which unpacks it
+and runs the copy.
 
 ## Running the checks
 

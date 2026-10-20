@@ -3,8 +3,8 @@
 #include <zlib.h>
 
 #include <chrono>
-#include <cstdio>
 #include <cstring>
+#include <utility>
 
 #include "engine/core/log.h"
 #include "engine/fs/io_stats.h"
@@ -27,34 +27,45 @@ uint64_t ReadBe(const uint8_t* p, int bytes) {
 
 }
 
-Psarc::~Psarc() {
-    if (file_) {
-        std::fclose(file_);
-    }
-}
-
 bool Psarc::Open(const std::filesystem::path& path) {
-    file_ = os::OpenFile(path, "rb");
-    if (!file_) {
+    auto source = OpenFileSource(path);
+    if (!source) {
         LogError("psarc: cannot open {}", pt::os::PathToUtf8(path));
         return false;
     }
+    return Open(std::move(source), pt::os::PathToUtf8(path.filename()));
+}
+
+bool Psarc::Open(std::shared_ptr<ByteSource> source, std::string_view name) {
+    if (!source) {
+        LogError("psarc: nothing to read for {}", name);
+        return false;
+    }
+    source_ = std::move(source);
     uint8_t header[32];
-    if (std::fread(header, 1, sizeof(header), file_) != sizeof(header) || std::memcmp(header, "PSAR", 4) != 0) {
-        LogError("psarc: bad header in {}", pt::os::PathToUtf8(path));
+    if (!source_->ReadAt(0, header, sizeof(header)) || std::memcmp(header, "PSAR", 4) != 0) {
+        LogError("psarc: bad header in {}", name);
         return false;
     }
     if (std::memcmp(header + 8, "zlib", 4) != 0) {
-        LogError("psarc: unsupported compression in {}", pt::os::PathToUtf8(path));
+        LogError("psarc: unsupported compression in {}", name);
         return false;
     }
     const uint32_t toc_length = ReadBe32(header + 12);
     const uint32_t entry_size = ReadBe32(header + 16);
     const uint32_t entry_count = ReadBe32(header + 20);
     block_size_ = ReadBe32(header + 24);
+    if (toc_length < sizeof(header) || !block_size_ || !entry_size) {
+        LogError("psarc: bad TOC header in {}", name);
+        return false;
+    }
 
     std::vector<uint8_t> toc(toc_length - sizeof(header));
-    if (std::fread(toc.data(), 1, toc.size(), file_) != toc.size()) {
+    if (!source_->ReadAt(sizeof(header), toc.data(), toc.size())) {
+        return false;
+    }
+    if (size_t(entry_count) * entry_size > toc.size()) {
+        LogError("psarc: {} entries do not fit its TOC in {}", entry_count, name);
         return false;
     }
     entries_.resize(entry_count);
@@ -92,7 +103,7 @@ bool Psarc::Open(const std::filesystem::path& path) {
     for (size_t i = 1; i < names_.size() && i < entries_.size(); ++i) {
         index_[names_[i]] = i;
     }
-    LogInfo("psarc: {} entries in {}", entries_.size() - 1, pt::os::PathToUtf8(path.filename()));
+    LogInfo("psarc: {} entries in {}", entries_.size() - 1, name);
     return true;
 }
 
@@ -126,20 +137,20 @@ std::optional<std::vector<uint8_t>> Psarc::ReadEntry(size_t index) const {
     std::vector<uint8_t> out;
     out.reserve(entry.size);
     std::vector<uint8_t> block;
-    const auto wait_start = std::chrono::steady_clock::now();
-    std::lock_guard lock(mutex_);
     const auto read_start = std::chrono::steady_clock::now();
-    if (os::SeekFile(file_, static_cast<long long>(entry.offset), SEEK_SET) != 0) {
-        return std::nullopt;
-    }
     IoSimulatedLatency();
+    uint64_t position = entry.offset;
     uint32_t block_index = entry.first_block;
     while (out.size() < entry.size) {
-        const uint32_t stored = block_sizes_[block_index] ? block_sizes_[block_index] : block_size_;
-        block.resize(stored);
-        if (std::fread(block.data(), 1, stored, file_) != stored) {
+        if (block_index >= block_sizes_.size()) {
             return std::nullopt;
         }
+        const uint32_t stored = block_sizes_[block_index] ? block_sizes_[block_index] : block_size_;
+        block.resize(stored);
+        if (!source_->ReadAt(position, block.data(), stored)) {
+            return std::nullopt;
+        }
+        position += stored;
         const uint64_t remaining = entry.size - out.size();
         if (stored == block_size_ && remaining >= block_size_) {
             out.insert(out.end(), block.begin(), block.end());
@@ -156,8 +167,7 @@ std::optional<std::vector<uint8_t>> Psarc::ReadEntry(size_t index) const {
     }
     out.resize(entry.size);
     const auto end = std::chrono::steady_clock::now();
-    IoRecord(out.size(), std::chrono::duration<double, std::milli>(end - read_start).count(),
-             std::chrono::duration<double, std::milli>(read_start - wait_start).count());
+    IoRecord(out.size(), std::chrono::duration<double, std::milli>(end - read_start).count(), 0.0);
     return out;
 }
 

@@ -3,6 +3,7 @@
 #include <SDL3/SDL.h>
 
 #include "engine/core/log.h"
+#include "engine/fs/zarchive.h"
 #include "engine/platform/os.h"
 #include "game/save_data.h"
 #include "game/ui/pc_settings.h"
@@ -60,6 +61,12 @@ std::optional<std::deque<Choice>> TestScript() {
         start = end + 1;
     }
     return script;
+}
+
+/* True when the path is a .zar (not a folder that happens to be called that). */
+bool IsArchiveFile(const fs::path& path) {
+    std::error_code error;
+    return fs::is_regular_file(path, error) && pt::ZArchive::LooksLikeArchive(path);
 }
 
 uint64_t FileSize(const fs::path& file) {
@@ -141,8 +148,9 @@ public:
             std::string error;
         } wait;
         const std::string title = T(folder ? "pc_first_run_pick_folder" : "pc_first_run_pick_pkg");
-        const std::string pkg_name = T("pc_first_run_pkg_filter") + " (*.pkg)", all_name = T("pc_first_run_all_files");
-        const SDL_DialogFileFilter filters[] = {{pkg_name.c_str(), "pkg"}, {all_name.c_str(), "*"}};
+        const std::string pkg_name = T("pc_first_run_pkg_filter") + " (*.pkg)", zar_name = T("pc_first_run_zar_filter") + " (*.zar)",
+                        all_name = T("pc_first_run_all_files");
+        const SDL_DialogFileFilter filters[] = {{pkg_name.c_str(), "pkg"}, {zar_name.c_str(), "zar"}, {all_name.c_str(), "*"}};
         const SDL_PropertiesID props = SDL_CreateProperties();
         SDL_SetStringProperty(props, SDL_PROP_FILE_DIALOG_TITLE_STRING, title.c_str());
         std::string location;
@@ -261,7 +269,7 @@ public:
     Flow(const Context& context, Ui& ui) : c_(context), ui_(ui) {}
 
     Outcome UseFolder(const fs::path& picked) {
-        pt::LogInfo("first run: folder {}", Utf8(picked));
+        pt::LogInfo("first run: {} {}", IsArchiveFile(picked) ? "the .zar" : "the folder", Utf8(picked));
         const fs::path game = FindGameFolder(picked);
         if (game.empty()) {
             std::vector<fs::path> packages;
@@ -284,6 +292,9 @@ public:
         pt::LogInfo("first run: file {}", Utf8(file));
         if (pt::setup::IsPackage(file)) return UsePackage(file);
         std::error_code error;
+        /* A .zar of the game folder is a game file location of its own: it is mounted, nothing is
+         * copied out of it (engine/fs/vfs.cpp). */
+        if (fs::is_regular_file(file, error) && LooksLikeGameDir(file)) return UseFolder(file);
         if (fs::is_regular_file(file, error) && LooksLikeGameDir(file.parent_path())) return UseFolder(file.parent_path());
         if (fs::is_directory(file, error)) return UseFolder(file);
         return {{}, ui_.T("pc_first_run_not_pkg", {Utf8(file)})};
@@ -451,13 +462,34 @@ void Remember(const Context& c, const fs::path& game) {
 
 bool LooksLikeGameDir(const fs::path& dir) {
     std::error_code error;
-    return !dir.empty() && fs::is_regular_file(dir / "chunk1.psarc", error) && fs::is_regular_file(dir / "texture.qar", error);
+    if (dir.empty()) return false;
+    if (!fs::is_directory(dir, error)) return pt::ZArchive::LooksLikeArchive(dir);
+    return fs::is_regular_file(dir / "chunk1.psarc", error) && fs::is_regular_file(dir / "texture.qar", error);
+}
+
+fs::path SingleGameArchive(const fs::path& dir) {
+    std::error_code error;
+    fs::path found;
+    for (fs::directory_iterator it(dir, fs::directory_options::skip_permission_denied, error), end; !error && it != end; it.increment(error)) {
+        std::error_code type_error;
+        if (!it->is_regular_file(type_error) || it->path().extension() != fs::path(".zar")) continue;
+        if (!found.empty()) return {};
+        found = it->path();
+    }
+    return found;
 }
 
 fs::path FindGameFolder(const fs::path& picked) {
     if (picked.empty()) return {};
     if (LooksLikeGameDir(picked)) return picked;
     if (LooksLikeGameDir(picked / "CUSA01127")) return picked / "CUSA01127";
+    {
+        std::error_code error;
+        if (fs::is_directory(picked, error)) {
+            const fs::path archive = SingleGameArchive(picked);
+            if (!archive.empty() && LooksLikeGameDir(archive)) return archive;
+        }
+    }
     std::vector<fs::path> level{picked};
     std::error_code error;
     for (int depth = 0; depth < 2 && !level.empty(); ++depth) {
@@ -555,9 +587,10 @@ Result Run(const Context& context) {
             continue;
         }
         Remember(context, outcome.game_dir);
+        const std::string kind = outcome.extracted ? "extracted from the PKG" : IsArchiveFile(outcome.game_dir) ? "a .zar picked" : "a folder picked";
         const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - opened).count();
-        pt::LogInfo("first run: using {} ({})", Utf8(outcome.game_dir), outcome.extracted ? "extracted from the PKG" : "an extracted folder");
-        return {outcome.game_dir, std::format("{} in the first-run screen after {:.1f} s", outcome.extracted ? "extracted from the PKG" : "a folder picked", seconds)};
+        pt::LogInfo("first run: using {} ({})", Utf8(outcome.game_dir), kind);
+        return {outcome.game_dir, std::format("{} in the first-run screen after {:.1f} s", kind, seconds)};
     }
 }
 

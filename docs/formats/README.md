@@ -5,8 +5,8 @@ the tools in `tools/` are written against them. Byte layouts are complete and ar
 where a field's meaning is a guess it says so.
 
 | File | Format | Tool |
-|---|---|---|
-| `psarc.md` | `chunk1.psarc`, the main archive, and the `.fpk` packages inside it | `tools/psarc.py`, `tools/fpk.py` |
+|---|---|---|| `psarc.md` | `chunk1.psarc`, the main archive, and the `.fpk` packages inside it | `tools/psarc.py`, `tools/fpk.py` |
+| `zarchive.md` | `.zar`, the game folder packed into one compressed archive | ZArchive's packer (the note says why `tools/` has none) |
 | `pkg.md`, `self.md` | PS4 package and executable containers | `tools/pkginfo.py`, `tools/self2elf.py`, `tools/dynlib.py` |
 | `foxcrypt.md` | the encryption on the Lua files | `tools/foxcrypt.py` |
 | `fox2.md` | Fox Engine data sets (entities and their properties) | `tools/fox2.py`, `tools/foxhash.py` |

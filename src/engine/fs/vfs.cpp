@@ -2,18 +2,30 @@
 
 #include <chrono>
 #include <cstdio>
-#include <fstream>
 #include <iterator>
 
 #include "engine/core/log.h"
+#include "engine/fs/byte_source.h"
 #include "engine/fs/io_stats.h"
-#include "engine/platform/os.h"
 #include "engine/fs/mods.h"
+#include "engine/platform/os.h"
 
 namespace pt {
 
-bool Vfs::Mount(const std::filesystem::path& game_dir) {
-    game_dir_ = game_dir;
+bool Vfs::Mount(const std::filesystem::path& game) {
+    game_dir_ = game;
+    std::error_code error;
+    if (std::filesystem::is_directory(game, error)) {
+        return MountFolder(game);
+    }
+    if (std::filesystem::is_regular_file(game, error)) {
+        return MountArchive(game);
+    }
+    LogError("vfs: {} is neither the extracted CUSA01127 folder nor a .zar archive of it", pt::os::PathToUtf8(game));
+    return false;
+}
+
+bool Vfs::MountFolder(const std::filesystem::path& game_dir) {
     const auto psarc_path = game_dir / "chunk1.psarc";
     if (!std::filesystem::exists(psarc_path)) {
         LogError("vfs: {} not found, game dir must be the extracted CUSA01127 folder", pt::os::PathToUtf8(psarc_path));
@@ -29,6 +41,70 @@ bool Vfs::Mount(const std::filesystem::path& game_dir) {
     }
     ReportDataDifferences();
     return true;
+}
+
+bool Vfs::MountArchive(const std::filesystem::path& file) {
+    auto zar = std::make_shared<ZArchive>();
+    if (!zar->Open(file)) {
+        LogError("vfs: {} is not a readable .zar: {}", pt::os::PathToUtf8(file), zar->Error());
+        return false;
+    }
+    const std::string root = FindArchiveRoot(*zar);
+    const auto inside = [&root](std::string_view name) {
+        return root.empty() ? std::string(name) : root + "/" + std::string(name);
+    };
+    const auto psarc = zar->Find(inside("chunk1.psarc"));
+    const auto qar = zar->Find(inside("texture.qar"));
+    if (psarc == ZArchive::kNone || !zar->IsFile(psarc)) {
+        LogError("vfs: {} has no chunk1.psarc at its root or two folders deep; pack the CUSA01127 folder (or the "
+                 "dump that holds it)",
+                 pt::os::PathToUtf8(file));
+        return false;
+    }
+    if (qar == ZArchive::kNone || !zar->IsFile(qar)) {
+        LogError("vfs: {} has no texture.qar beside {}", pt::os::PathToUtf8(file), inside("chunk1.psarc"));
+        return false;
+    }
+    if (!archive_.Open(OpenArchiveEntrySource(zar, psarc), inside("chunk1.psarc")) ||
+        !textures_.Open(OpenArchiveEntrySource(zar, qar), inside("texture.qar"))) {
+        return false;
+    }
+    zar_ = zar;
+    archive_root_ = root;
+    LogInfo("vfs: game files from {} ({} entries inside the .zar)", pt::os::PathToUtf8(file), zar->Entries());
+    ReportDataDifferences();
+    return true;
+}
+
+std::string Vfs::FindArchiveRoot(const ZArchive& zar) const {
+    const auto has_game_files = [&zar](const std::string& root) {
+        const auto inside = [&root](std::string_view name) {
+            return root.empty() ? std::string(name) : root + "/" + std::string(name);
+        };
+        const auto psarc = zar.Find(inside("chunk1.psarc"));
+        const auto qar = zar.Find(inside("texture.qar"));
+        return psarc != ZArchive::kNone && zar.IsFile(psarc) && qar != ZArchive::kNone && zar.IsFile(qar);
+    };
+    if (has_game_files("")) return {};
+    std::vector<std::string> level{""};
+    for (int depth = 0; depth < 2 && !level.empty(); ++depth) {
+        std::vector<std::string> next;
+        for (const std::string& dir : level) {
+            const auto node = zar.Find(dir);
+            if (node == ZArchive::kNone || zar.IsFile(node)) continue;
+            for (uint32_t index = 0;; ++index) {
+                std::string name;
+                bool is_file = true;
+                if (!zar.Child(node, index, name, &is_file)) break;
+                if (is_file) continue;
+                const std::string child = dir.empty() ? name : dir + "/" + name;
+                if (has_game_files(child)) return child;
+                if (next.size() < 256) next.push_back(child);
+            }
+        }
+        level = std::move(next);
+    }
+    return {};
 }
 
 namespace {
@@ -56,17 +132,43 @@ int Vfs::MissingCorePackages() const {
     return missing;
 }
 
+std::optional<std::vector<uint8_t>> Vfs::ReadLoose(std::string_view path) const {
+    const std::string name = ToArchivePath(path);
+    if (zar_) {
+        return zar_->Read(archive_root_.empty() ? name : archive_root_ + "/" + name);
+    }
+    const auto loose = game_dir_ / std::filesystem::path(name);
+    if (!std::filesystem::is_regular_file(loose)) {
+        return std::nullopt;
+    }
+    const auto read_start = std::chrono::steady_clock::now();
+    FILE* f = os::OpenFile(loose, "rb");
+    if (!f) return std::nullopt;
+    IoSimulatedLatency();
+    std::vector<uint8_t> data(static_cast<size_t>(std::filesystem::file_size(loose)));
+    const size_t read = std::fread(data.data(), 1, data.size(), f);
+    std::fclose(f);
+    IoRecord(read, std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - read_start).count(), 0.0);
+    if (read != data.size()) {
+        return std::nullopt;
+    }
+    return data;
+}
+
 void Vfs::ReportDataDifferences() const {
-    std::error_code ec;
-    const auto source = game_dir_ / "source.txt";
-    if (std::filesystem::is_regular_file(source, ec)) {
-        std::ifstream in(source);
-        for (std::string line; std::getline(in, line);) {
+    if (const auto source = ReadLoose("source.txt")) {
+        const std::string_view text(reinterpret_cast<const char*>(source->data()), source->size());
+        for (size_t at = 0; at <= text.size();) {
+            size_t end = text.find('\n', at);
+            if (end == std::string_view::npos) end = text.size();
+            std::string line(text.substr(at, end - at));
+            if (!line.empty() && line.back() == '\r') line.pop_back();
             if (line.starts_with("warning=")) {
                 LogWarn("data: {}", line.substr(8));
             } else if (!line.empty()) {
                 LogInfo("data: {}", line);
             }
+            at = end + 1;
         }
     }
 
@@ -167,22 +269,7 @@ std::optional<std::vector<uint8_t>> Vfs::ReadFileUntraced(std::string_view path)
     if (auto data = archive_.Read(ToArchivePath(path))) {
         return data;
     }
-    const auto loose = game_dir_ / std::filesystem::path(ToArchivePath(path));
-    if (std::filesystem::is_regular_file(loose)) {
-        const auto read_start = std::chrono::steady_clock::now();
-        FILE* f = os::OpenFile(loose, "rb");
-        if (f) {
-            IoSimulatedLatency();
-            std::vector<uint8_t> data(static_cast<size_t>(std::filesystem::file_size(loose)));
-            const size_t read = std::fread(data.data(), 1, data.size(), f);
-            std::fclose(f);
-            IoRecord(read, std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - read_start).count(), 0.0);
-            if (read == data.size()) {
-                return data;
-            }
-        }
-    }
-    return std::nullopt;
+    return ReadLoose(path);
 }
 
 }

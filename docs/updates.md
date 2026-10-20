@@ -24,7 +24,9 @@ prereleases, nonnumeric release tags and API errors. It compares numeric version
 | Apple silicon | `P.T.PC.Port-macOS-arm64.zip` |
 | Intel Mac | `P.T.PC.Port-macOS-x64.zip` |
 
-Windows portable ZIPs remain available as an additional download, but the notification points to the installer. If the matching
+The Linux AppImage (`P.T.PC.Port-x86_64.AppImage`, `docs/linux.md`) is an additional download like the portable ZIPs, not the
+update target, so the notice keeps pointing at `P.T.PC.Port.Setup-linux`. Windows portable ZIPs remain available as an additional
+download, but the notification points to the installer. If the matching
 asset is not present yet (for example, while the macOS workflow is building), the notice points to the release page. Custom Linux
 installer names also fall back to the release page; use the canonical name above for a direct link. Only HTTPS asset links are used.
 The first line of the release body supplies a short log note. The response limit is 512 KiB; timeout is 5 seconds.

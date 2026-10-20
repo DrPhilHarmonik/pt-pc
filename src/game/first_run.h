@@ -26,8 +26,12 @@ struct Result {
 
 Result Run(const Context& context);
 
+/* The game files: a folder with chunk1.psarc and texture.qar, or a .zar that holds them (a .zar of
+ * the whole dump works, the game files are found inside it; engine/fs/vfs.cpp mounts it). */
 bool LooksLikeGameDir(const std::filesystem::path& dir);
 std::filesystem::path FindGameFolder(const std::filesystem::path& picked);
+/* The only .zar in a folder, or an empty path when there is none or more than one. */
+std::filesystem::path SingleGameArchive(const std::filesystem::path& dir);
 int PlayerLanguage(const std::filesystem::path& user_dir);
 std::string Text(std::string_view key, int language, std::initializer_list<std::string> args = {});
 

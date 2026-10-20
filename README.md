@@ -19,10 +19,10 @@ the street, with the voice part included.
 
 ## What you need
 
-- Your own copy of P.T. The port is built and tested with the US release, CUSA01127, as a dump folder from your console
-  or a fake PKG made from that dump. The European and Japanese releases install too, with a note, but I have not seen
-  their data myself. A store PKG cannot be used: it is encrypted for the console that owns it, and nothing here
-  decrypts it.
+- Your own copy of P.T. The port is built and tested with the US release, CUSA01127, as a dump folder from your console,
+  a fake PKG made from that dump, or a `.zar` of the dump. The European and Japanese releases install too, with a note, but
+  I have not seen their data myself. A store PKG cannot be used: it is encrypted for the console that owns it, and nothing
+  here decrypts it.
 - Windows 10 or 11 (x64), Linux x86-64 with glibc 2.38 or newer (Ubuntu 24.04, Debian 13, Fedora 39, current Arch
   and SteamOS), or macOS 14 or newer on an Apple silicon or Intel Mac.
 - A GPU and driver with Vulkan 1.3; on macOS the port brings MoltenVK, which runs Vulkan on Metal. The optional
@@ -48,6 +48,12 @@ open it once and allow it under System Settings > Privacy & Security (it is not 
 dump folder when it asks. A fake PKG has to be extracted on Windows or Linux first. Intel Macs need a GPU that MoltenVK can
 run the renderer on; the port was written without a Mac at hand and the Intel app has not been run on one yet. More in
 docs/macos.md.
+
+A `.zar` takes the place of the dump folder and needs no installer step. Pack the `CUSA01127` folder (or the dump that
+contains it) with [ZArchive](https://github.com/Exzap/ZArchive)'s packer, the format shadPS4 mounts as `/app0`, then point
+the game at the archive: `pt --game <file.zar>`, a single `.zar` in `game/` or next to `pt` (or `pt.exe`), or the first-run
+screen's file button. Nothing is extracted; `chunk1.psarc` and `texture.qar` are read from inside the archive a 64 KiB
+block at a time, and everything a `.zar` needs for a start is in it ([the format](docs/formats/zarchive.md)).
 
 Windows and Linux releases include installers and portable ZIPs. To update an existing installation, use the game's update
 button or run the new installer over it. Your game archives, settings, saves and mods stay.
