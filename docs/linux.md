@@ -33,7 +33,9 @@ Settings, saves and `pt.log` live in `data/` next to pt (a build folder, an unzi
 
 Native, on a Linux machine (X11 and Wayland): `cmake -G Ninja -B build/linux -DCMAKE_BUILD_TYPE=RelWithDebInfo` then
 `cmake --build build/linux --parallel 6 --target pt`. Needs a C++20 compiler with `<format>` (GCC 13+ or clang 17+),
-the Vulkan headers and `glslc`.
+the Vulkan headers and `glslc`, and SDL3's X11 development packages (`libx11-dev libxext-dev libxrandr-dev
+libxcursor-dev libxfixes-dev libxi-dev libxss-dev libxtst-dev libxkbcommon-dev`): its configure stops on the
+X11 features whose headers are missing, so `.github/workflows/linux.yml` installs the same set for the AppImage.
 
 Cross build on Windows:
 

@@ -24,14 +24,18 @@ jobs:
       - uses: actions/checkout@v7
 
       # find_package(Vulkan COMPONENTS glslc) wants the headers and glslc; SDL3 is built from source (cmake/Dependencies.cmake)
-      # and loads X11, Wayland, ALSA, PulseAudio and PipeWire at run time, so they need their development packages
+      # and loads X11, Wayland, ALSA, PulseAudio and PipeWire at run time, so they need their development packages.
+      # SDL3 3.4 makes every X11 feature it enables mandatory at configure time (SDL_missing_dependency is an error, not
+      # a warning), so the Xcursor and XScreenSaver headers have to be there too, not just X11, Xext, Xrandr, Xfixes, Xi
+      # and Xtst: without libxcursor-dev the configure stops at "Couldn't find dependency package for XCURSOR".
       - name: Tools
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             cmake ninja-build g++ pkg-config \
             libvulkan-dev glslc glslang-tools \
-            libx11-dev libxext-dev libxrandr-dev libxfixes-dev libxi-dev libxtst-dev libxkbcommon-dev \
+            libx11-dev libxext-dev libxrandr-dev libxfixes-dev libxi-dev libxtst-dev \
+            libxcursor-dev libxss-dev libxkbcommon-dev \
             libwayland-dev wayland-protocols libdecor-0-dev \
             libasound2-dev libpulse-dev libpipewire-0.3-dev libudev-dev libdbus-1-dev
 
