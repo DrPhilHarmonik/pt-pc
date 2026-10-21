@@ -46,7 +46,7 @@ grep -q "not found" "$OUT/ldd-pt.log" && note "ldd: missing libraries (ldd-pt.lo
 
 note "== unit tests"
 step platform "$LOCAL/pt_platform_test" --network
-for t in pt_tests pt_collision_test pt_mods_test pt_graphics_preset_test pt_gouge_input_test pt_peephole_look_test pt_light_cull_test; do
+for t in pt_tests pt_collision_test pt_mods_test pt_zarchive_test pt_graphics_preset_test pt_gouge_input_test pt_peephole_look_test pt_light_cull_test; do
     step "$t" "$LOCAL/$t"
 done
 step pt_multilingual_test "$LOCAL/pt_multilingual_test" "$GAME"
