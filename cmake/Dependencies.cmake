@@ -173,6 +173,8 @@ FetchContent_Declare(zstd URL https://github.com/facebook/zstd/releases/download
   URL_HASH SHA256=eb33e51f49a15e023950cd7825ca74a4a2b43db8354825ac24fc1b7ee09e6fa3)
 FetchContent_Populate(zstd)
 file(GLOB ZSTD_SOURCES ${zstd_SOURCE_DIR}/lib/common/*.c ${zstd_SOURCE_DIR}/lib/decompress/*.c)
+# the archive the .zar test writes compresses its blocks, so that target adds the compressor (CMakeLists.txt)
+file(GLOB ZSTD_COMPRESS_SOURCES ${zstd_SOURCE_DIR}/lib/compress/*.c)
 
 file(GLOB LUA51_SOURCES ${lua51_SOURCE_DIR}/src/*.c)
 list(FILTER LUA51_SOURCES EXCLUDE REGEX ".*/(lua|luac|print)\\.c$")

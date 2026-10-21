@@ -549,8 +549,9 @@ target_link_libraries(pt_mods_test PRIVATE pt_engine)
 
 # the .zar reader (engine/fs/zarchive.h) and the byte source chunk1.psarc and texture.qar read
 # through when the game files are an archive (engine/fs/byte_source.h); the test writes its own
-# archive, so no game files are needed
-add_executable(pt_zarchive_test tests/zarchive_test.cpp)
+# archive, so no game files are needed. Writing one compresses its blocks, so this target also builds
+# zstd's compressor, which the game itself leaves out (cmake/Dependencies.cmake keeps the decompressor only)
+add_executable(pt_zarchive_test tests/zarchive_test.cpp ${ZSTD_COMPRESS_SOURCES})
 target_link_libraries(pt_zarchive_test PRIVATE pt_engine)
 
 
