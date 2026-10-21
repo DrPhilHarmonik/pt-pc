@@ -126,8 +126,8 @@ bool ZArchive::Open(const std::filesystem::path& path) {
     cache_.resize(kCacheBlocks);
     for (CacheBlock& block : cache_) block.data.resize(kBlockSize);
 
-    std::vector<uint8_t> raw_offsets(size_t(offsets_size));
-    std::vector<uint8_t> raw_tree(size_t(tree_size));
+    std::vector<uint8_t> raw_offsets(static_cast<size_t>(offsets_size));
+    std::vector<uint8_t> raw_tree(static_cast<size_t>(tree_size));
     const bool tables = ReadRaw(sections[1][0], raw_offsets.data(), raw_offsets.size()) &&
                         (names_.empty() || ReadRaw(sections[2][0], names_.data(), names_.size())) &&
                         ReadRaw(sections[3][0], raw_tree.data(), raw_tree.size());
