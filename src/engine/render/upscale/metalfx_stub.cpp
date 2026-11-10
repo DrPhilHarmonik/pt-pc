@@ -1,3 +1,4 @@
+#include "engine/render/upscale/frame_generation.h"
 #include "engine/render/upscale/upscale.h"
 
 #if !defined(PT_WITH_METALFX)
